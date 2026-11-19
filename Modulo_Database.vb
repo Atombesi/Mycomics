@@ -60,4 +60,39 @@ Public Module Modulo_Database
 
     End Function
 
+    ' Restituisce le collane non eliminate, ordinate per nome.
+    Public Function CaricaCollane() As DataTable
+
+        Dim elencoCollane As New DataTable()
+
+        Dim configurazione As New SqliteConnectionStringBuilder()
+        configurazione.DataSource = Gbl_DataBase
+        configurazione.Mode = SqliteOpenMode.ReadOnly
+
+        Dim istruzioneSql As String =
+            "SELECT ID, NOME " &
+            "FROM COLLANE " &
+            "WHERE ELIMINATO = 0 " &
+            "ORDER BY NOME"
+
+        Using connessione As New SqliteConnection(configurazione.ToString())
+
+            connessione.Open()
+
+            Using comando As New SqliteCommand(istruzioneSql, connessione)
+
+                Using lettore As SqliteDataReader = comando.ExecuteReader()
+
+                    elencoCollane.Load(lettore)
+
+                End Using
+
+            End Using
+
+        End Using
+
+        Return elencoCollane
+
+    End Function
+
 End Module
