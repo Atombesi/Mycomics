@@ -22,11 +22,12 @@ Public Module Modulo_Copertine
     '     "Arthur_King", "C:\Copertine\ArthurKing")
     '
     ' Eseguire da un evento Async (non blocca la UI).
-    ' Il parametro filtroNomeFile deve essere una parte del nome delle immagini
-    ' (es. Arthur_King), non il titolo visualizzato nella pagina.
+    ' filtroNomeFile è mantenuto per compatibilità con le chiamate precedenti.
+    ' massimoSchede=3 limita il primo test; impostare 0 per tutte le schede.
     Public Async Function ScaricaCollanaAsync(urlIndice As String,
                                                filtroNomeFile As String,
-                                               cartellaDestinazione As String) As Task(Of List(Of EsitoCopertina))
+                                               cartellaDestinazione As String,
+                                               Optional massimoSchede As Integer = 3) As Task(Of List(Of EsitoCopertina))
 
         Dim risultati As New List(Of EsitoCopertina)
         Directory.CreateDirectory(cartellaDestinazione)
@@ -61,41 +62,38 @@ Public Module Modulo_Copertine
                     Dim html As String = Await client.GetStringAsync(pagina)
                     Dim candidati As New List(Of Uri)
 
-                    ' Esamina i collegamenti e le immagini presenti nella scheda.
-                    ' Il sito può usare miniature TH_ e file originali distinti.
-                    For Each mm As Match In Regex.Matches(html,
-                        "(?:href|src)\s*=\s*[""'](?<url>[^""']+\.(?:jpg|jpeg|png)(?:\?[^""']*)?)[""']",
-                        RegexOptions.IgnoreCase)
-                        Dim indirizzo As String = WebUtility.HtmlDecode(mm.Groups("url").Value)
+                    ' Il collegamento alla copertina principale è uno script PHP.
+                    ' Si usa l'URL effettivo della pagina, senza dedurre il nome JPG.
+                    Dim patternCopertina As String =
+                        "<a\\b[^>]*href\\s*=\\s*[""'](?<url>[^""']*showimg\\.php\\?[^""']*\\bidimg=0(?:&amp;|&|[""']))"
+
+                    Dim collegamento As Match = Regex.Match(html, patternCopertina,
+                                                            RegexOptions.IgnoreCase)
+                    If collegamento.Success Then
+                        Dim indirizzo As String = WebUtility.HtmlDecode(collegamento.Groups("url").Value)
                         Dim immagine As Uri = Nothing
-                        If Not Uri.TryCreate(pagina, indirizzo, immagine) Then Continue For
-                        If immagine.Host <> pagina.Host Then Continue For
-                        Dim nome As String = Path.GetFileName(immagine.AbsolutePath)
-                        If Not nome.Contains(filtroNomeFile, StringComparison.OrdinalIgnoreCase) Then Continue For
-                        If Not candidati.Any(Function(u) u.AbsoluteUri = immagine.AbsoluteUri) Then candidati.Add(immagine)
-
-                        ' Ipotesi verificata solo quando il download restituisce
-                        ' effettivamente un'immagine grande.
-                        If nome.StartsWith("TH_", StringComparison.OrdinalIgnoreCase) Then
-                            Dim originale As New Uri(immagine, nome.Substring(3))
-                            If Not candidati.Any(Function(u) u.AbsoluteUri = originale.AbsoluteUri) Then candidati.Add(originale)
+                        If Uri.TryCreate(pagina, indirizzo, immagine) AndAlso
+                           immagine.Host.Equals(pagina.Host, StringComparison.OrdinalIgnoreCase) Then
+                            candidati.Add(immagine)
                         End If
-                    Next
-
-                    ' Prima immagini senza TH_; il controllo delle dimensioni
-                    ' esclude comunque le miniature.
-                    candidati = candidati.OrderBy(Function(u) If(Path.GetFileName(u.AbsolutePath).StartsWith("TH_", StringComparison.OrdinalIgnoreCase), 1, 0)).ToList()
+                    End If
 
                     For Each immagine As Uri In candidati
                         Try
                             Using risposta As HttpResponseMessage = Await client.GetAsync(immagine)
                                 If Not risposta.IsSuccessStatusCode Then Continue For
                                 Dim dati As Byte() = Await risposta.Content.ReadAsByteArrayAsync()
-                                If dati.Length < 10000 Then Continue For
+                                If dati.Length < 10000 Then
+                                    esito.Messaggio = "Risposta troppo piccola (" & dati.Length & " byte)"
+                                    Continue For
+                                End If
 
                                 Using memoria As New MemoryStream(dati)
                                     Using bitmap As Image = Image.FromStream(memoria)
-                                        If bitmap.Width < 400 OrElse bitmap.Height < 500 Then Continue For
+                                        If bitmap.Width < 400 OrElse bitmap.Height < 500 Then
+                                            esito.Messaggio = "Immagine troppo piccola: " & bitmap.Width & "x" & bitmap.Height
+                                            Continue For
+                                        End If
                                         Dim estensione As String = If(bitmap.RawFormat.Guid = Imaging.ImageFormat.Png.Guid, ".png", ".jpg")
                                         Dim nomeFile As String = "Copertina_" & numero.Replace("/", "-") & estensione
                                         Dim destinazione As String = Path.Combine(cartellaDestinazione, nomeFile)
@@ -112,16 +110,17 @@ Public Module Modulo_Copertine
                                 End Using
                             End Using
                         Catch ex As Exception
-                            ' Si prova il candidato successivo.
+                            esito.Messaggio = "Errore immagine: " & ex.Message
                         End Try
                     Next
 
-                    If esito.FileSalvato = "" Then esito.Messaggio = "Nessuna copertina grande individuata"
+                    If esito.FileSalvato = "" AndAlso esito.Messaggio = "" Then esito.Messaggio = "Nessun collegamento showimg.php con idimg=0"
                 Catch ex As Exception
                     esito.Messaggio = "Errore scheda: " & ex.Message
                 End Try
 
                 ' Una richiesta alla volta, per non sovraccaricare il sito.
+                If massimoSchede > 0 AndAlso risultati.Count >= massimoSchede Then Exit For
                 Await Task.Delay(350)
             Next
         End Using
