@@ -64,18 +64,31 @@ Public Module Modulo_Copertine
 
                     ' Il collegamento alla copertina principale è uno script PHP.
                     ' Si usa l'URL effettivo della pagina, senza dedurre il nome JPG.
-                    Dim patternCopertina As String =
-                        "<a\\b[^>]*href\\s*=\\s*[""'](?<url>[^""']*showimg\\.php\\?[^""']*\\bidimg=0(?:&amp;|&|[""']))"
+                    ' Cerca i link Fancybox e identifica la copertina tramite
+                    ' il parametro idimg=0, senza dipendere dall'ordine dei parametri.
+                    Dim linkImmagini As Integer = 0
+                    For Each link As Match In Regex.Matches(html,
+                        "<a\\b[^>]*href\\s*=\\s*[""'](?<url>[^""']+)[""']",
+                        RegexOptions.IgnoreCase Or RegexOptions.Singleline)
 
-                    Dim collegamento As Match = Regex.Match(html, patternCopertina,
-                                                            RegexOptions.IgnoreCase)
-                    If collegamento.Success Then
-                        Dim indirizzo As String = WebUtility.HtmlDecode(collegamento.Groups("url").Value)
+                        Dim indirizzo As String = WebUtility.HtmlDecode(link.Groups("url").Value)
+                        If Not indirizzo.Contains("showimg.php", StringComparison.OrdinalIgnoreCase) Then Continue For
+                        linkImmagini += 1
+
                         Dim immagine As Uri = Nothing
-                        If Uri.TryCreate(pagina, indirizzo, immagine) AndAlso
-                           immagine.Host.Equals(pagina.Host, StringComparison.OrdinalIgnoreCase) Then
-                            candidati.Add(immagine)
-                        End If
+                        If Not Uri.TryCreate(pagina, indirizzo, immagine) Then Continue For
+                        If Not immagine.Host.Equals(pagina.Host, StringComparison.OrdinalIgnoreCase) Then Continue For
+
+                        Dim parametri As String = immagine.Query.TrimStart("?"c)
+                        If Not Regex.IsMatch(parametri, "(?:^|&)idimg=0(?:&|$)", RegexOptions.IgnoreCase) Then Continue For
+
+                        candidati.Add(immagine)
+                        Exit For
+                    Next
+
+                    If candidati.Count = 0 Then
+                        esito.Messaggio = "Collegamenti showimg.php trovati: " & linkImmagini &
+                                         "; HTML: " & html.Length & " caratteri"
                     End If
 
                     For Each immagine As Uri In candidati
@@ -114,7 +127,7 @@ Public Module Modulo_Copertine
                         End Try
                     Next
 
-                    If esito.FileSalvato = "" AndAlso esito.Messaggio = "" Then esito.Messaggio = "Nessun collegamento showimg.php con idimg=0"
+                    If esito.FileSalvato = "" AndAlso esito.Messaggio = "" Then esito.Messaggio = "Nessuna immagine salvata"
                 Catch ex As Exception
                     esito.Messaggio = "Errore scheda: " & ex.Message
                 End Try
